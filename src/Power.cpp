@@ -7,6 +7,7 @@ uint32_t cpu_context[33];
 static void PM_InterruptHandler(void)
 {
     unsigned int flags = interrupt_lock();
+    PM.wakeFromDoze();
     PM.wakeFromSleepCallback();
     interrupt_unlock(flags);
 }
@@ -196,11 +197,15 @@ void Power::enableRTCInterrupt()
     *(uint32_t*)RTC_MASK_INT &= 0xFFFFFEFE;
     *(uint32_t*)RTC_CCR |= 0x00000001;
     *(uint32_t*)RTC_CCR &= 0xFFFFFFFD;
+    volatile uint32_t read = *(uint32_t*)RTC_EOI;
     
+    pmCB = &wakeFromRTC;
+    uint32_t rtc_eoi = *(uint32_t*)RTC_EOI; //clear match interrupt
     interrupt_disable(IRQ_RTC_INTR);
     interrupt_connect(IRQ_RTC_INTR , &PM_InterruptHandler);
+    //Serial1.println("attaching");
+    delayTicks(6400);   //2ms
     interrupt_enable(IRQ_RTC_INTR);
-    
 }
 
 void Power::enableAONGPIOInterrupt(int aon_gpio, int mode)
@@ -244,9 +249,14 @@ void Power::enableAONGPIOInterrupt(int aon_gpio, int mode)
     interrupt_enable(IRQ_ALWAYS_ON_GPIO);
 }
 
+void Power::wakeFromRTC()
+{
+    *(uint32_t*)RTC_MASK_INT |= 0x00000101;
+    interrupt_disable(IRQ_RTC_INTR);
+}
+
 void Power::x86_C2Request()
 {
-    Serial1.println("C2 request");
     switchToHybridOscillator();
     //set the CCU_C2_LP_EN bit
     *(uint32_t*)CCU_LP_CLK_CTL = (*(uint32_t*)CCU_LP_CLK_CTL) | 0x00000002;

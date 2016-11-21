@@ -111,6 +111,8 @@ class Power
         void enableRTCInterrupt();
         
         void enableAONGPIOInterrupt(int aon_gpio, int mode);
+        
+        static void wakeFromRTC();
 
         void x86_C2Request();
         
