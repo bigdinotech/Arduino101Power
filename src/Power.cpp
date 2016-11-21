@@ -1,15 +1,14 @@
 #include "Power.h"
 
 Power PM;
+uint32_t arc_restore_addr;
+uint32_t cpu_context[33];
 
 static void PM_InterruptHandler(void)
 {
-    *(uint32_t*)RTC_CCR |= 0xFFFFFFFE;
-    uint32_t rtc_eoi = *(uint32_t*)RTC_EOI; //clear match interrupt
-    digitalWrite(12, HIGH);
-    digitalWrite(12, LOW);
-    Serial1.println("wake");
+    unsigned int flags = interrupt_lock();
     PM.wakeFromSleepCallback();
+    interrupt_unlock(flags);
 }
 
 Power::Power()
@@ -20,7 +19,7 @@ Power::Power()
 void Power::doze()
 {
   turnOffUSB();
-  
+  dozing = true;
   //switch from external crystal oscillator to internal hybrid oscilator
   switchToHybridOscillator();
   
@@ -50,22 +49,20 @@ void Power::wakeFromDoze()
   current_val = *(uint32_t*)CCU_SYS_CLK_CTL;
   *(uint32_t*)CCU_SYS_CLK_CTL = current_val | 0x00000001;
 
-  //switch back to the external crystal oiscillator
+  //switch back to the external crystal oscillator
   void switchToCrystalOscillator();
   
   turnOnUSB();
+  
+  dozing = false;
 }
 
 void Power::sleep()
 {
-   turnOffUSB();
-   //*(uint32_t*)SLP_CFG &= 0xFFFFFEFF;
+   doze();
+   while(dozing);
    
-   x86_C2Request();
-   isSleeping = true;
-   //*(uint32_t*)CCU_LP_CLK_CTL = (*(uint32_t*)CCU_LP_CLK_CTL) | 0x00000002;
-   //uint32_t c2 = *(uint32_t*)P_LVL2;
-   *(uint32_t*)PM1C |= 0x00002000;
+   //FIXME:  Actually go to sleep instead of just dozing
 }
 
 void Power::sleep(int duration)
@@ -77,32 +74,12 @@ void Power::sleep(int duration)
 
 void Power::deepSleep()
 {
-   turnOffUSB();
-   
-   x86_C2Request();
-   isSleeping = true;
-   *(uint32_t*)CCU_LP_CLK_CTL  |= 0x00000001;
-   //uint32_t c2 = *(uint32_t*)P_LVL2;
-   *(uint32_t*)PM1C |= 0x00002000;
+   sleep();
 }
 
 void Power::deepSleep(int duration)
 {
-    setRTCCMR(duration);
-    enableRTCInterrupt();
-    deepSleep();
-}
-
-void Power::switchToHybridOscillator()
-{
-    //read trim value from OTP
-    uint32_t trimMask = *(uint16_t*)OSCTRIM_ADDR << 20;
-    *(uint32_t*)OSC0_CFG1 = 0x00000002 | trimMask;  //switch to internal oscillator using trim value from OTP
-}
-
-void Power::switchToCrystalOscillator()
-{
-    *(uint32_t*)OSC0_CFG1 = 0x00070009;
+    sleep(duration);
 }
 
 inline void Power::wakeFromSleepCallback(void)
@@ -111,9 +88,68 @@ inline void Power::wakeFromSleepCallback(void)
         pmCB();
 }
 
-void Power::attachWakeInterrupt(void (*userCallBack)())
+void Power::attachInterruptWakeup(uint32_t pin, voidFuncPtr callback, uint32_t mode)
 {
-    pmCB = userCallBack;
+    if( pin >= NUM_DIGITAL_PINS  )
+    {
+        pmCB = callback;
+        switch (pin)
+        {
+            case AON_GPIO0:
+                enableAONGPIOInterrupt(0, mode);
+                break;
+            case AON_GPIO1:
+                enableAONGPIOInterrupt(1, mode);
+                break;
+            case AON_GPIO2:
+                enableAONGPIOInterrupt(2, mode);
+                break;
+            case AON_GPIO3:
+                enableAONGPIOInterrupt(3, mode);
+                break;
+            case INT_BMI160:
+                enableAONGPIOInterrupt(4, mode);
+                break;
+            case INT_BLE:
+                enableAONGPIOInterrupt(5, mode);
+                break;
+            default:
+                break;
+        };
+    }
+    else
+    {
+        //regular gpio interrupt
+        attachInterrupt(pin, callback, mode);
+    }
+}
+
+void Power::detachInterruptWakeup(uint32_t pin)
+{
+    pmCB = NULL;
+    if( pin >= NUM_DIGITAL_PINS  )
+    {
+        if(pin == INT_RTC)
+        {
+            interrupt_disable(IRQ_RTC_INTR);
+        }
+        else if (pin == INT_COMP)
+        {
+            interrupt_disable(IRQ_ALWAYS_ON_TMR);
+        }
+        else if (pin == AON_TIMER)
+        {
+            interrupt_disable(IRQ_COMPARATORS_INTR);
+        }
+        else
+        {
+           interrupt_disable(IRQ_ALWAYS_ON_GPIO);
+        }
+    }
+    else
+    {
+        detachInterrupt(pin);
+    }
 }
 
 //Privates
@@ -128,10 +164,21 @@ void Power::turnOnUSB()
     *(uint32_t*)USB_PHY_CFG0 &= 0xFFFFFFFE;
 }
 
+void Power::switchToHybridOscillator()
+{
+    //read trim value from OTP
+    uint32_t trimMask = *(uint16_t*)OSCTRIM_ADDR << 20;
+    *(uint32_t*)OSC0_CFG1 = 0x00000002 | trimMask;  //switch to internal oscillator using trim value from OTP
+}
+
+void Power::switchToCrystalOscillator()
+{
+    *(uint32_t*)OSC0_CFG1 = 0x00070009;
+}
+
 void Power::setRTCCMR(int milliseconds)
 {
     *(uint32_t*)RTC_CMR = readRTC_CCVR() + millisToRTCTicks(milliseconds);
-    //*(uint32_t*)RTC_CMR = readRTC_CCVR() + milliseconds;
 }
 
 uint32_t Power::readRTC_CCVR()
@@ -146,20 +193,63 @@ uint32_t Power::millisToRTCTicks(int milliseconds)
 
 void Power::enableRTCInterrupt()
 {
-    *(uint32_t*)RTC_MASK_INT &= 0xFFFFFFFF;
+    *(uint32_t*)RTC_MASK_INT &= 0xFFFFFEFE;
     *(uint32_t*)RTC_CCR |= 0x00000001;
     *(uint32_t*)RTC_CCR &= 0xFFFFFFFD;
+    
     interrupt_disable(IRQ_RTC_INTR);
     interrupt_connect(IRQ_RTC_INTR , &PM_InterruptHandler);
     interrupt_enable(IRQ_RTC_INTR);
+    
+}
+
+void Power::enableAONGPIOInterrupt(int aon_gpio, int mode)
+{
+    switch(mode)
+    {
+        case CHANGE:    //not supported just do the same as FALLING
+            *(uint32_t*)AON_GPIO_INTTYPE_LEVEL |= 1 << aon_gpio;
+            *(uint32_t*)AON_GPIO_INT_POL &= ~(1 << aon_gpio);
+            break;
+        case RISING:
+            *(uint32_t*)AON_GPIO_INTTYPE_LEVEL |= 1 << aon_gpio;
+            *(uint32_t*)AON_GPIO_INT_POL |= 1 << aon_gpio;
+            break;
+        case FALLING:
+            *(uint32_t*)AON_GPIO_INTTYPE_LEVEL |= 1 << aon_gpio;
+            *(uint32_t*)AON_GPIO_INT_POL &= ~(1 << aon_gpio);
+            break;
+        case HIGH:
+            *(uint32_t*)AON_GPIO_INTTYPE_LEVEL &= ~(1 << aon_gpio);
+            *(uint32_t*)AON_GPIO_INT_POL |= 1 << aon_gpio;
+            break;
+        case LOW:
+            *(uint32_t*)AON_GPIO_INTTYPE_LEVEL &= ~(1 << aon_gpio);
+            *(uint32_t*)AON_GPIO_INT_POL &= ~(1 << aon_gpio);
+            break;
+        default:
+            *(uint32_t*)AON_GPIO_INTTYPE_LEVEL &= ~(1 << aon_gpio);
+            *(uint32_t*)AON_GPIO_INT_POL &= ~(1 << aon_gpio);
+            break;
+    };
+    
+    *(uint32_t*)AON_GPIO_SWPORTA_DDR &= ~(1 << aon_gpio);
+    *(uint32_t*)AON_GPIO_INTMASK &= ~(1 << aon_gpio);
+    *(uint32_t*)AON_GPIO_INTEN |= 1 << aon_gpio;
+    
+    
+    *(uint32_t*)AON_GPIO_MASK_INT &= 0xFFFFFEFE;
+    interrupt_disable(IRQ_ALWAYS_ON_GPIO);
+    interrupt_connect(IRQ_ALWAYS_ON_GPIO , &PM_InterruptHandler);
+    interrupt_enable(IRQ_ALWAYS_ON_GPIO);
 }
 
 void Power::x86_C2Request()
 {
+    Serial1.println("C2 request");
     switchToHybridOscillator();
     //set the CCU_C2_LP_EN bit
     *(uint32_t*)CCU_LP_CLK_CTL = (*(uint32_t*)CCU_LP_CLK_CTL) | 0x00000002;
     //request for the x86 core go into C2 sleep
     volatile uint32_t c2 = *(volatile uint32_t*)P_LVL2;
- 
 }
