@@ -60,16 +60,153 @@ void Power::wakeFromDoze()
 
 void Power::sleep()
 {
+   uint32_t creg_mst0_ctrl = 0;
+   creg_mst0_ctrl = __builtin_arc_lr(QM_SS_CREG_BASE);
+
+   /*
+	 * Clock gate the sensor peripherals at CREG level.
+	 * This clock gating is independent of the peripheral-specific clock
+	 * gating provided in ss_clk.h .
+   */
+   creg_mst0_ctrl |= (QM_SS_IO_CREG_MST0_CTRL_ADC_CLK_GATE |
+    QM_SS_IO_CREG_MST0_CTRL_I2C1_CLK_GATE |
+	QM_SS_IO_CREG_MST0_CTRL_I2C0_CLK_GATE |
+	QM_SS_IO_CREG_MST0_CTRL_SPI1_CLK_GATE |
+	QM_SS_IO_CREG_MST0_CTRL_SPI0_CLK_GATE);
+    
+    __builtin_arc_sr(creg_mst0_ctrl, QM_SS_CREG_BASE);
+    
+   //#if 0
+   x86_C2Request();
    doze();
-   while(dozing);
    
+      __asm__ __volatile__(
+		    "sleep %0"
+		    :
+		    : "i"(QM_SS_SLEEP_MODE_CORE_OFF));
+   
+   /**
+   while(dozing)
+   {
+    digitalWrite(11, HIGH);
+    digitalWrite(11, LOW);
+   }
+   **/
+   
+   //#endif 
+   
+   #if 0
    //FIXME:  Actually go to sleep instead of just dozing
+   
+   Serial1.println(" start of sleep");
+   if((QM_SCSS_GP->gps0)&0x00000004)
+   {
+       Serial1.println("waking up");
+       //goto wake_from_sleep;
+   }
+   turnOffUSB();
+   //*(uint32_t*)SLP_CFG &= 0xFFFFFEFF;
+   
+   Serial1.print("arc restore addr0: ");
+   Serial1.println(arc_restore_addr);
+   
+   Serial1.print("arc restore addr1: ");
+   Serial1.println((uint32_t)&arc_restore_addr, HEX);
+   Serial1.println((uint32_t)&&wake_from_sleep, HEX);
+   
+   qm_ss_set_resume_vector(sleep_restore_trap, arc_restore_addr);
+   shared_data->arc_restore_addr = (&&wake_from_sleep);
+   
+   Serial1.print("arc restore addr1b: ");
+   Serial1.println(arc_restore_addr, HEX);
+   Serial1.println((uint32_t)&&wake_from_sleep, HEX);
+   /**
+   for(int i = 0 ; i < 32; i++)
+   {
+       cpu_context[i] = 0;
+       Serial1.print("reg");
+       Serial1.print(i);
+       Serial1.print(": ");
+       Serial1.println(cpu_context[i], HEX); 
+   }
+   **/
+   qm_ss_save_context(cpu_context);
+   
+   for(int i = 0 ; i < 32; i++)
+   {
+       Serial1.print("reg");
+       Serial1.print(i);
+       Serial1.print(": ");
+       Serial1.println(cpu_context[i], HEX);
+       shared_data->arc_cpu_context[i] = cpu_context[i];      
+   }
+   
+   //Serial1.print("arc restore addr2: ");
+   //Serial1.println(arc_restore_addr);
+
+   shared_data->pm_status |= 0x00000001;
+   QM_SCSS_GP->gps0 |= BIT(QM_GPS0_BIT_SENSOR_WAKEUP);
+   
+   for(int i = 0 ; i < 32; i++)
+   {
+       cpu_context[i] = shared_data->arc_cpu_context[i];
+       Serial1.print("reg");
+       Serial1.print(i);
+       Serial1.print(": ");
+       Serial1.println(cpu_context[i], HEX);
+   }
+
+   Serial1.println("really sleeping");
+   
+   x86_C2Request();
+   isSleeping = true;
+   
+   /**
+   __asm__ __volatile__(
+		    "sleep %0"
+		    :
+		    : "i"(QM_SS_SLEEP_MODE_CORE_OFF_TIMER_OFF));
+   **/
+   
+   *(uint32_t*)CCU_LP_CLK_CTL = (*(uint32_t*)CCU_LP_CLK_CTL) | 0x00000002;
+   uint32_t c2 = *(uint32_t*)P_LVL2;
+   Serial1.println("PM1C");
+   *(uint32_t*)PM1C |= 0x00002000;
+   
+   wake_from_sleep:
+   Serial1.println("restoring context");
+   for(int i = 0 ; i < 32; i++)
+   {
+       cpu_context[i] = shared_data->arc_cpu_context[i];
+       Serial1.print("reg");
+       Serial1.print(i);
+       Serial1.print(": ");
+       Serial1.println(cpu_context[i], HEX);
+   }
+   qm_ss_restore_context(sleep_restore_trap, cpu_context);
+   Serial1.println("context restored");
+   
+   digitalWrite(12, HIGH);
+   digitalWrite(12, LOW);
+   digitalWrite(12, HIGH);
+   digitalWrite(12, LOW);
+   
+   #endif
+   
+   creg_mst0_ctrl &= ~(QM_SS_IO_CREG_MST0_CTRL_ADC_CLK_GATE |
+			    QM_SS_IO_CREG_MST0_CTRL_I2C1_CLK_GATE |
+			    QM_SS_IO_CREG_MST0_CTRL_I2C0_CLK_GATE |
+			    QM_SS_IO_CREG_MST0_CTRL_SPI1_CLK_GATE |
+			    QM_SS_IO_CREG_MST0_CTRL_SPI0_CLK_GATE);
+                
+   __builtin_arc_sr(creg_mst0_ctrl, QM_SS_CREG_BASE);
 }
 
 void Power::sleep(int duration)
 {
-    setRTCCMR(duration);
-    enableRTCInterrupt();
+    //setRTCCMR(duration);
+    //enableRTCInterrupt();
+    enableAONPTimerInterrrupt(duration);
     sleep();
 }
 
@@ -175,6 +312,7 @@ void Power::switchToHybridOscillator()
 void Power::switchToCrystalOscillator()
 {
     *(uint32_t*)OSC0_CFG1 = 0x00070009;
+    while(!(*(uint32_t*)OSC0_STAT & 0x00000002));   //wait till crystal oscillator is stable
 }
 
 void Power::setRTCCMR(int milliseconds)
@@ -200,10 +338,8 @@ void Power::enableRTCInterrupt()
     volatile uint32_t read = *(uint32_t*)RTC_EOI;
     
     pmCB = &wakeFromRTC;
-    uint32_t rtc_eoi = *(uint32_t*)RTC_EOI; //clear match interrupt
     interrupt_disable(IRQ_RTC_INTR);
     interrupt_connect(IRQ_RTC_INTR , &PM_InterruptHandler);
-    //Serial1.println("attaching");
     delayTicks(6400);   //2ms
     interrupt_enable(IRQ_RTC_INTR);
 }
@@ -249,10 +385,32 @@ void Power::enableAONGPIOInterrupt(int aon_gpio, int mode)
     interrupt_enable(IRQ_ALWAYS_ON_GPIO);
 }
 
+void Power::enableAONPTimerInterrrupt(int millis)
+{
+    pmCB = resetAONPTimer;
+    *(uint32_t*)AONPT_CFG = millisToRTCTicks(millis);
+    *(uint32_t*)AONPT_CTRL |= 0x00000003;
+    
+    *(uint32_t*)AON_TIMER_MASK_INT &= 0xFFFFFEFE;
+    interrupt_disable(IRQ_ALWAYS_ON_TMR);
+    interrupt_connect(IRQ_ALWAYS_ON_TMR , &PM_InterruptHandler);
+    //delayTicks(6400);   //2ms
+    interrupt_enable(IRQ_ALWAYS_ON_TMR);
+}
+
+void Power::resetAONPTimer()
+{
+    *(uint32_t*)AONPT_CFG = 0;
+    *(uint32_t*)AONPT_CTRL |= 0x00000001;
+    delayTicks(6400);   //2ms
+    //Serial1.println("resetting timer");
+}
+
 void Power::wakeFromRTC()
 {
     *(uint32_t*)RTC_MASK_INT |= 0x00000101;
     interrupt_disable(IRQ_RTC_INTR);
+    volatile uint32_t read = *(uint32_t*)RTC_EOI;
 }
 
 void Power::x86_C2Request()

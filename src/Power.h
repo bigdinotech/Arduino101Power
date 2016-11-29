@@ -1,4 +1,6 @@
+#define OSC0_STAT       0xB0800004
 #define OSC0_CFG1       0xB0800008
+
 #define CCU_SS_PERIPH_CLK_GATE_CTL  0xB0800028
 #define CCU_LP_CLK_CTL  0xB080002C
 #define CCU_SYS_CLK_CTL 0xB0800038
@@ -21,8 +23,8 @@
 #define RTC_CMR         0xB0000404
 #define RTC_CCR         0xB000040C
 #define RTC_EOI         0xB0000418
-#define RTC_MASK_INT    0xB0800478
 
+#define RTC_MASK_INT            0xB0800478
 #define AON_TIMER_MASK_INT      0xB08004C8
 #define AON_GPIO_MASK_INT       0xB08004D4
 
@@ -34,10 +36,15 @@
 #define AON_GPIO_INTTYPE_LEVEL      0xB0800B38
 #define AON_GPIO_INT_POL            0xB0800B3C
 #define AON_GPIO_DEBOUNCE           0xB0888B48
-#define AON_GPIO_PORTA_EOI           0xB0800B4C
+#define AON_GPIO_PORTA_EOI          0xB0800B4C
 
+#define PM_LOCK         0xB0800594
 
 #define OSCTRIM_ADDR    0xffffe1f8
+
+#define QM_SS_SLEEP_MODE_CORE_OFF (0x0)
+#define QM_SS_SLEEP_MODE_CORE_OFF_TIMER_OFF (0x20)
+#define QM_SS_SLEEP_MODE_CORE_TIMERS_RTC_OFF (0x60)
 
 enum wakeSource{
     AON_GPIO0 = 100,
@@ -58,8 +65,8 @@ enum wakeSource{
 #include <stdint.h>
 #include <interrupt.h>
 #include <board.h>
-//#include "qm_sensor_regs.h"
-//#include "ss_power_states.h"
+#include "qmsi/qm_sensor_regs.h"
+#include "qmsi/ss_power_states.h"
 
 class Power
 {
@@ -112,7 +119,13 @@ class Power
         
         void enableAONGPIOInterrupt(int aon_gpio, int mode);
         
+        void enableAONPTimerInterrrupt(int millis);
+        
+        static void resetAONPTimer();
+        
         static void wakeFromRTC();
+        
+        static void wakeHostFromRTC();
 
         void x86_C2Request();
         
