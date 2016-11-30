@@ -17,7 +17,7 @@
 #define USB_PLL_CFG0    0xB0800014
 #define USB_PHY_CFG0    0xB0800800
 
-#define RTC_CCVR        0xB0000400
+#define RTC_CCVR        (volatile int*)0xB0000400 // Current Counter Value Register
 #define RTC_CMR         0xB0000404
 #define RTC_CCR         0xB000040C
 #define RTC_EOI         0xB0000418
@@ -39,6 +39,10 @@
 
 #define OSCTRIM_ADDR    0xffffe1f8
 
+#define QM_SS_SLEEP_MODE_CORE_OFF (0x0)
+#define QM_SS_SLEEP_MODE_CORE_OFF_TIMER_OFF (0x20)
+#define QM_SS_SLEEP_MODE_CORE_TIMERS_RTC_OFF (0x60)
+
 enum wakeSource{
     AON_GPIO0 = 100,
     AON_GPIO1 = 101,
@@ -58,64 +62,70 @@ enum wakeSource{
 #include <stdint.h>
 #include <interrupt.h>
 #include <board.h>
-//#include "qm_sensor_regs.h"
-//#include "ss_power_states.h"
+#include "qmsi/qm_sensor_regs.h"
+#include "qmsi/ss_power_states.h"
 
 class Power
 {
     public:
         Power();
-        
+
         //puts the SoC into "doze" mode which lowers the system clock speed to 32k
         void doze();
-        
+
         void doze(int duration);
-        
+
         void wakeFromDoze();
-        
+
         void sleep();
-        
+
         void sleep(int duration);
-        
+
         void deepSleep();
-        
+
         void deepSleep(int duration);
-        
+
         void wakeFromSleepCallback(void);
-        
+
         void attachInterruptWakeup(uint32_t pin, voidFuncPtr callback, uint32_t mode);
 
         void detachInterruptWakeup(uint32_t pin);
-        
-        uint32_t arc_restore_addr;  
+
+        uint32_t arc_restore_addr;
 
     private:
         void turnOffUSB();
-        
+
         void turnOnUSB();
-        
+
         void switchToHybridOscillator();
-        
+
         void switchToCrystalOscillator();
-        
-        void setRTCCMR(int milliseconds);
-        
+
+        void setRTCCMR(int seconds);
+
         uint32_t readRTC_CCVR();
-        
+
         bool isSleeping = false;
-        
+
         volatile bool dozing = false;
-        
+
         uint32_t millisToRTCTicks(int milliseconds);
-        
-        void enableRTCInterrupt();
-        
+
+        void enableRTCInterrupt(int seconds);
+
         void enableAONGPIOInterrupt(int aon_gpio, int mode);
-        
+
+        void enableAONPTimerInterrrupt(int millis);
+
+        static void resetAONPTimer();
+
         static void wakeFromRTC();
 
         void x86_C2Request();
         
+        void x86_C2LPRequest();
+
         void (*pmCB)();
 };
 

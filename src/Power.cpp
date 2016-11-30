@@ -60,16 +60,41 @@ void Power::wakeFromDoze()
 
 void Power::sleep()
 {
+   uint32_t creg_mst0_ctrl = 0;
+   creg_mst0_ctrl = __builtin_arc_lr(QM_SS_CREG_BASE);
+
+   /*
+	 * Clock gate the sensor peripherals at CREG level.
+	 * This clock gating is independent of the peripheral-specific clock
+	 * gating provided in ss_clk.h .
+   */
+   creg_mst0_ctrl |= (QM_SS_IO_CREG_MST0_CTRL_ADC_CLK_GATE |
+    QM_SS_IO_CREG_MST0_CTRL_I2C1_CLK_GATE |
+	QM_SS_IO_CREG_MST0_CTRL_I2C0_CLK_GATE |
+	QM_SS_IO_CREG_MST0_CTRL_SPI1_CLK_GATE |
+	QM_SS_IO_CREG_MST0_CTRL_SPI0_CLK_GATE);
+    
+    __builtin_arc_sr(creg_mst0_ctrl, QM_SS_CREG_BASE);
+   x86_C2LPRequest();
    doze();
-   while(dozing);
    
-   //FIXME:  Actually go to sleep instead of just dozing
+      __asm__ __volatile__(
+		    "sleep %0"
+		    :
+		    : "i"(QM_SS_SLEEP_MODE_CORE_OFF));
+   
+   creg_mst0_ctrl &= ~(QM_SS_IO_CREG_MST0_CTRL_ADC_CLK_GATE |
+			    QM_SS_IO_CREG_MST0_CTRL_I2C1_CLK_GATE |
+			    QM_SS_IO_CREG_MST0_CTRL_I2C0_CLK_GATE |
+			    QM_SS_IO_CREG_MST0_CTRL_SPI1_CLK_GATE |
+			    QM_SS_IO_CREG_MST0_CTRL_SPI0_CLK_GATE);
+                
+   __builtin_arc_sr(creg_mst0_ctrl, QM_SS_CREG_BASE);
 }
 
 void Power::sleep(int duration)
 {
-    setRTCCMR(duration);
-    enableRTCInterrupt();
+    enableAONPTimerInterrrupt(duration);
     sleep();
 }
 
@@ -175,16 +200,17 @@ void Power::switchToHybridOscillator()
 void Power::switchToCrystalOscillator()
 {
     *(uint32_t*)OSC0_CFG1 = 0x00070009;
+    while(!(*(uint32_t*)OSC0_STAT & 0x00000002));   //wait till crystal oscillator is stable
 }
 
-void Power::setRTCCMR(int milliseconds)
+void Power::setRTCCMR(int seconds)
 {
-    *(uint32_t*)RTC_CMR = readRTC_CCVR() + millisToRTCTicks(milliseconds);
+    *(uint32_t*)RTC_CMR = readRTC_CCVR() + seconds;
 }
 
 uint32_t Power::readRTC_CCVR()
 {
-    return *(uint32_t*)RTC_CCVR;
+    return *RTC_CCVR;
 }
 
 uint32_t Power::millisToRTCTicks(int milliseconds)
@@ -192,18 +218,17 @@ uint32_t Power::millisToRTCTicks(int milliseconds)
     return (uint32_t)((double)milliseconds*32.768);
 }
 
-void Power::enableRTCInterrupt()
+void Power::enableRTCInterrupt(int seconds)
 {
+    setRTCCMR(seconds);
     *(uint32_t*)RTC_MASK_INT &= 0xFFFFFEFE;
     *(uint32_t*)RTC_CCR |= 0x00000001;
     *(uint32_t*)RTC_CCR &= 0xFFFFFFFD;
     volatile uint32_t read = *(uint32_t*)RTC_EOI;
     
     pmCB = &wakeFromRTC;
-    uint32_t rtc_eoi = *(uint32_t*)RTC_EOI; //clear match interrupt
     interrupt_disable(IRQ_RTC_INTR);
     interrupt_connect(IRQ_RTC_INTR , &PM_InterruptHandler);
-    //Serial1.println("attaching");
     delayTicks(6400);   //2ms
     interrupt_enable(IRQ_RTC_INTR);
 }
@@ -249,17 +274,54 @@ void Power::enableAONGPIOInterrupt(int aon_gpio, int mode)
     interrupt_enable(IRQ_ALWAYS_ON_GPIO);
 }
 
+void Power::enableAONPTimerInterrrupt(int millis)
+{
+    pmCB = resetAONPTimer;
+    *(uint32_t*)AONPT_CFG = millisToRTCTicks(millis);
+    *(uint32_t*)AONPT_CTRL |= 0x00000003;
+    
+    *(uint32_t*)AON_TIMER_MASK_INT &= 0xFFFFFEFE;
+    interrupt_disable(IRQ_ALWAYS_ON_TMR);
+    interrupt_connect(IRQ_ALWAYS_ON_TMR , &PM_InterruptHandler);
+    delayTicks(6400);   //2ms
+    interrupt_enable(IRQ_ALWAYS_ON_TMR);
+}
+
+void Power::resetAONPTimer()
+{
+    *(uint32_t*)AONPT_CFG = 0;
+    *(uint32_t*)AONPT_CTRL |= 0x00000001;
+    delayTicks(6400);
+    
+    
+    //trick the HOST into waking from AONPTimer
+    *(uint32_t*)AONPT_CFG = 10;
+    *(uint32_t*)AONPT_CTRL |= 0x00000003;
+    
+    *(uint32_t*)AON_TIMER_MASK_INT &= 0xFFFFFFFE;
+    interrupt_enable(IRQ_ALWAYS_ON_TMR);
+    
+    
+}
+
 void Power::wakeFromRTC()
 {
     *(uint32_t*)RTC_MASK_INT |= 0x00000101;
     interrupt_disable(IRQ_RTC_INTR);
+    volatile uint32_t read = *(uint32_t*)RTC_EOI;
 }
 
 void Power::x86_C2Request()
 {
     switchToHybridOscillator();
-    //set the CCU_C2_LP_EN bit
-    *(uint32_t*)CCU_LP_CLK_CTL = (*(uint32_t*)CCU_LP_CLK_CTL) | 0x00000002;
     //request for the x86 core go into C2 sleep
     volatile uint32_t c2 = *(volatile uint32_t*)P_LVL2;
+}
+
+void Power::x86_C2LPRequest()
+{
+    switchToHybridOscillator();
+    //request for the x86 core go into C2 sleep
+    *(uint32_t*)CCU_LP_CLK_CTL |= 0x00000002;
+    volatile uint32_t c2lp = *(volatile uint32_t*)P_LVL2;
 }
