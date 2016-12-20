@@ -4,12 +4,153 @@ Power PM;
 uint32_t arc_restore_addr;
 uint32_t cpu_context[33];
 
-static void PM_InterruptHandler(void)
+typedef void (*user_cb)(void);
+
+static void sleepInterruptHandler(void)
 {
     unsigned int flags = interrupt_lock();
     PM.wakeFromDoze();
     PM.wakeFromSleepCallback();
     interrupt_unlock(flags);
+}
+
+static void dozeInterruptHandler(void)
+{
+    unsigned int flags = interrupt_lock();
+    PM.wakeFromDoze();
+    interrupt_unlock(flags);
+}
+
+static void soc_gpio_sleep_isr()
+{
+    if(soc_sleeping || soc_dozing)
+    {
+        unsigned int flags = interrupt_lock();
+        PM.wakeFromDoze();
+        wsrc_t wsrc;
+        while (wsrc_get_newest_attached(&wsrc))
+        {
+            PinDescription *p = &g_APinDescription[wsrc.id];
+            uint32_t mask = 0x1 << p->ulGPIOId;
+            if(p->ulGPIOPort == SOC_GPIO_32)
+            {
+                uint32_t status = shared_data->pm_int_status;
+                if((status>>p->ulGPIOId)&0x1)
+                {
+                    //call user callback
+                    user_cb cb = (user_cb)wsrc.callback;
+                    cb();
+                }
+            }
+        }
+        interrupt_unlock(flags);
+    }
+    soc_sleeping = false;
+}
+
+static void soc_aongpio_sleep_isr()
+{
+    if(soc_sleeping || soc_dozing)
+    {
+        unsigned int flags = interrupt_lock();
+        PM.wakeFromDoze();
+        wsrc_t wsrc;
+        while (wsrc_get_newest_attached(&wsrc))
+        {
+            PinDescription *p = &g_APinDescription[wsrc.id];
+            uint32_t mask = 0x1 << p->ulGPIOId;
+            if(p->ulGPIOPort == SOC_GPIO_32)
+            {
+                // Save interrupt status
+                uint32_t status = MMIO_REG_VAL_FROM_BASE(SOC_GPIO_AON_BASE_ADDR, SOC_GPIO_INTSTATUS);
+                // Mask the pending interrupts
+                MMIO_REG_VAL_FROM_BASE(SOC_GPIO_AON_BASE_ADDR, SOC_GPIO_INTMASK) |= status;
+                shared_data->pm_int_status = status;
+                // Clear interrupt flag (write 1 to clear)
+                MMIO_REG_VAL_FROM_BASE(SOC_GPIO_AON_BASE_ADDR, SOC_GPIO_PORTA_EOI) = status;
+                if((status>>p->ulGPIOId)&0x1)
+                {
+                    //call user callback
+                    user_cb cb = (user_cb)wsrc.callback;
+                    cb();
+                }
+            }
+        }
+        interrupt_unlock(flags);
+    }
+    soc_sleeping = false;
+}
+
+static void ss_gpio0_sleep_isr()
+{
+    if(soc_sleeping || soc_dozing)
+    {
+        unsigned int flags = interrupt_lock();
+        PM.wakeFromDoze();
+        wsrc_t wsrc;
+        while (wsrc_get_newest_attached(&wsrc)) {
+            PinDescription *p = &g_APinDescription[wsrc.id];
+            uint32_t mask = 0x1 << p->ulGPIOId;
+            if(p->ulGPIOPort == SS_GPIO_8B0)
+            {
+                uint32_t status = shared_data->pm_int_status;
+                if((status>>p->ulGPIOId)&0x1)
+                {
+                    //call user callback
+                    user_cb cb = (user_cb)wsrc.callback;
+                    cb();
+                }
+            }
+        }
+        interrupt_unlock(flags);
+    }
+    soc_sleeping = false;
+}
+
+static void ss_gpio1_sleep_isr()
+{
+    if(soc_sleeping || soc_dozing)
+    {
+        unsigned int flags = interrupt_lock();
+        PM.wakeFromDoze();
+        wsrc_t wsrc;
+        while (wsrc_get_newest_attached(&wsrc)) {
+            PinDescription *p = &g_APinDescription[wsrc.id];
+            uint32_t mask = 0x1 << p->ulGPIOId;
+            if(p->ulGPIOPort == SS_GPIO_8B1)
+            {
+                uint32_t status = shared_data->pm_int_status;
+                if((status>>p->ulGPIOId)&0x1)
+                {
+                    //call user callback
+                    user_cb cb = (user_cb)wsrc.callback;
+                    cb();
+                }
+            }
+        }
+        interrupt_unlock(flags);
+    }
+    soc_sleeping = false;
+}
+
+static void aontimer_isr()
+{
+    if(soc_sleeping || soc_dozing)
+    {
+        unsigned int flags = interrupt_lock();
+        interrupt_disable(IRQ_ALWAYS_ON_TMR);
+        *AONPT_CFG = 0;
+        PM.wakeFromDoze();
+        interrupt_unlock(flags);
+        //wait until quark core is running
+        volatile uint32_t psts = (*(uint32_t*)P_STS)&0x7;
+        while(psts)
+        {
+          psts = (*(uint32_t*)P_STS)&0x7;
+        }
+        PM.wakeFromSleepCallback();
+    }
+    soc_sleeping = false;
 }
 
 Power::Power()
@@ -19,18 +160,20 @@ Power::Power()
 
 void Power::doze()
 {
-  turnOffUSB();
-  dozing = true;
-  //switch from external crystal oscillator to internal hybrid oscilator
-  switchToHybridOscillator();
-  
-  //Set system clock to the RTC Crystal Oscillator
-  uint32_t current_val = *(uint32_t*)CCU_SYS_CLK_CTL;
-  *(uint32_t*)CCU_SYS_CLK_CTL = current_val & 0xFFFFFFFE;
+    //actually attach the interrupts
+    enableWakeInterrupts();
+    turnOffUSB();
+    soc_dozing = true;
+    //switch from external crystal oscillator to internal hybrid oscillator
+    switchToHybridOscillator();
 
-  //Powerdown hybrid oscillator
-  current_val = *(uint32_t*)OSC0_CFG1;
-  *(uint32_t*)OSC0_CFG1 = current_val | 0x00000004; 
+    //Set system clock to the RTC Crystal Oscillator
+    uint32_t current_val = *(uint32_t*)CCU_SYS_CLK_CTL;
+    *(uint32_t*)CCU_SYS_CLK_CTL = current_val & 0xFFFFFFFE;
+
+    //Powerdown hybrid oscillator
+    current_val = *(uint32_t*)OSC0_CFG1;
+    *(uint32_t*)OSC0_CFG1 = current_val | 0x00000004; 
 }
 
 void Power::doze(int duration)
@@ -40,56 +183,74 @@ void Power::doze(int duration)
     wakeFromDoze();
 }
 
+void Power::idle()
+{
+    doze();
+    while(soc_dozing);
+}
+
+void Power::idle(int duration)
+{
+    enableAONPTimerInterrrupt(duration);
+    idle();
+}
+
 void Power::wakeFromDoze()
 {
-  //Powerup hybrid oscillator
-  uint32_t current_val = *(uint32_t*)OSC0_CFG1;
-  *(uint32_t*)OSC0_CFG1 = current_val & 0xFFFFFFFB;
+    //Powerup hybrid oscillator
+    uint32_t current_val = *(uint32_t*)OSC0_CFG1;
+    *(uint32_t*)OSC0_CFG1 = current_val & 0xFFFFFFFB;
    
-  //Set system clock to the Hybrid Oscillator
-  current_val = *(uint32_t*)CCU_SYS_CLK_CTL;
-  *(uint32_t*)CCU_SYS_CLK_CTL = current_val | 0x00000001;
+    //Set system clock to the Hybrid Oscillator
+    current_val = *(uint32_t*)CCU_SYS_CLK_CTL;
+    *(uint32_t*)CCU_SYS_CLK_CTL = current_val | 0x00000001;
 
-  //switch back to the external crystal oscillator
-  void switchToCrystalOscillator();
+    //switch back to the external crystal oscillator
+    void switchToCrystalOscillator();
   
-  turnOnUSB();
-  
-  dozing = false;
+    turnOnUSB();
+    soc_dozing = false;
 }
 
 void Power::sleep()
 {
-   uint32_t creg_mst0_ctrl = 0;
-   creg_mst0_ctrl = __builtin_arc_lr(QM_SS_CREG_BASE);
-
-   /*
-	 * Clock gate the sensor peripherals at CREG level.
-	 * This clock gating is independent of the peripheral-specific clock
-	 * gating provided in ss_clk.h .
-   */
-   creg_mst0_ctrl |= (QM_SS_IO_CREG_MST0_CTRL_ADC_CLK_GATE |
-    QM_SS_IO_CREG_MST0_CTRL_I2C1_CLK_GATE |
-	QM_SS_IO_CREG_MST0_CTRL_I2C0_CLK_GATE |
-	QM_SS_IO_CREG_MST0_CTRL_SPI1_CLK_GATE |
-	QM_SS_IO_CREG_MST0_CTRL_SPI0_CLK_GATE);
+    soc_sleeping = true;
+    //disable low power mode on OPM_2P6 regulator
+    *(uint32_t*)SLP_CFG &= ~(1 << LPMODE_EN);
+    
+    uint32_t creg_mst0_ctrl = 0;
+    creg_mst0_ctrl = __builtin_arc_lr(QM_SS_CREG_BASE);
+    
+    /*
+	  * Clock gate the sensor peripherals at CREG level.
+	  * This clock gating is independent of the peripheral-specific clock
+	  * gating provided in ss_clk.h .
+    */
+    creg_mst0_ctrl |= (QM_SS_IO_CREG_MST0_CTRL_ADC_CLK_GATE |
+        QM_SS_IO_CREG_MST0_CTRL_I2C1_CLK_GATE |
+	    QM_SS_IO_CREG_MST0_CTRL_I2C0_CLK_GATE |
+	    QM_SS_IO_CREG_MST0_CTRL_SPI1_CLK_GATE |
+	    QM_SS_IO_CREG_MST0_CTRL_SPI0_CLK_GATE);
     
     __builtin_arc_sr(creg_mst0_ctrl, QM_SS_CREG_BASE);
-   x86_C2LPRequest();
-   doze();
+    
+    //Send request to put quark core to sleep
+    //x86_C2LPRequest(); //can only wake Quark core using AON_GPIO, RTC, AON_Timer, and AON_Comparators
+    x86_C2Request();
+    doze();
    
-      __asm__ __volatile__(
-		    "sleep %0"
-		    :
-		    : "i"(QM_SS_SLEEP_MODE_CORE_OFF));
-   
-   creg_mst0_ctrl &= ~(QM_SS_IO_CREG_MST0_CTRL_ADC_CLK_GATE |
-			    QM_SS_IO_CREG_MST0_CTRL_I2C1_CLK_GATE |
-			    QM_SS_IO_CREG_MST0_CTRL_I2C0_CLK_GATE |
-			    QM_SS_IO_CREG_MST0_CTRL_SPI1_CLK_GATE |
-			    QM_SS_IO_CREG_MST0_CTRL_SPI0_CLK_GATE);
+    __asm__ __volatile__(
+		"sleep %0"
+		:
+		: "i"(QM_SS_SLEEP_MODE_CORE_TIMERS_RTC_OFF));
+    
+    creg_mst0_ctrl &= ~(QM_SS_IO_CREG_MST0_CTRL_ADC_CLK_GATE |
+		QM_SS_IO_CREG_MST0_CTRL_I2C1_CLK_GATE |
+		QM_SS_IO_CREG_MST0_CTRL_I2C0_CLK_GATE |
+		QM_SS_IO_CREG_MST0_CTRL_SPI1_CLK_GATE |
+		QM_SS_IO_CREG_MST0_CTRL_SPI0_CLK_GATE);
                 
-   __builtin_arc_sr(creg_mst0_ctrl, QM_SS_CREG_BASE);
+    __builtin_arc_sr(creg_mst0_ctrl, QM_SS_CREG_BASE);
 }
 
 void Power::sleep(int duration)
@@ -110,72 +271,35 @@ void Power::deepSleep(int duration)
 
 inline void Power::wakeFromSleepCallback(void)
 {
+    //ToDo: check table and call apprpriate CBs
+    if(pmCB != NULL)
+        pmCB();
+    //ToDo: unregister all sleep IRQs
+}
+
+inline void Power::wakeFromDozeCallback(void)
+{
+    //ToDo: check table and call apprpriate CBs
     if(pmCB != NULL)
         pmCB();
 }
 
 void Power::attachInterruptWakeup(uint32_t pin, voidFuncPtr callback, uint32_t mode)
 {
-    if( pin >= NUM_DIGITAL_PINS  )
-    {
-        pmCB = callback;
-        switch (pin)
-        {
-            case AON_GPIO0:
-                enableAONGPIOInterrupt(0, mode);
-                break;
-            case AON_GPIO1:
-                enableAONGPIOInterrupt(1, mode);
-                break;
-            case AON_GPIO2:
-                enableAONGPIOInterrupt(2, mode);
-                break;
-            case AON_GPIO3:
-                enableAONGPIOInterrupt(3, mode);
-                break;
-            case INT_BMI160:
-                enableAONGPIOInterrupt(4, mode);
-                break;
-            case INT_BLE:
-                enableAONGPIOInterrupt(5, mode);
-                break;
-            default:
-                break;
-        };
+    if (pin > NUM_WAKEUP) {
+        return;
     }
-    else
-    {
-        //regular gpio interrupt
-        attachInterrupt(pin, callback, mode);
+
+    if (pin <= GPIO_END) {
+        wsrc_register_gpio(pin, callback, mode);
+    } else {
+        wsrc_register_id(pin, callback);
     }
 }
 
 void Power::detachInterruptWakeup(uint32_t pin)
 {
-    pmCB = NULL;
-    if( pin >= NUM_DIGITAL_PINS  )
-    {
-        if(pin == INT_RTC)
-        {
-            interrupt_disable(IRQ_RTC_INTR);
-        }
-        else if (pin == INT_COMP)
-        {
-            interrupt_disable(IRQ_ALWAYS_ON_TMR);
-        }
-        else if (pin == AON_TIMER)
-        {
-            interrupt_disable(IRQ_COMPARATORS_INTR);
-        }
-        else
-        {
-           interrupt_disable(IRQ_ALWAYS_ON_GPIO);
-        }
-    }
-    else
-    {
-        detachInterrupt(pin);
-    }
+    wsrc_unregister(pin);
 }
 
 //Privates
@@ -194,7 +318,8 @@ void Power::switchToHybridOscillator()
 {
     //read trim value from OTP
     uint32_t trimMask = *(uint16_t*)OSCTRIM_ADDR << 20;
-    *(uint32_t*)OSC0_CFG1 = 0x00000002 | trimMask;  //switch to internal oscillator using trim value from OTP
+    *(uint32_t*)OSC0_CFG1 = 0x00000002 | trimMask;  //switch to internal hybrid oscillator using trim value from OTP
+    //ToDo: wait for hybrid oscillator to stabilize
 }
 
 void Power::switchToCrystalOscillator()
@@ -228,7 +353,7 @@ void Power::enableRTCInterrupt(int seconds)
     
     pmCB = &wakeFromRTC;
     interrupt_disable(IRQ_RTC_INTR);
-    interrupt_connect(IRQ_RTC_INTR , &PM_InterruptHandler);
+    interrupt_connect(IRQ_RTC_INTR , &sleepInterruptHandler);
     delayTicks(6400);   //2ms
     interrupt_enable(IRQ_RTC_INTR);
 }
@@ -267,41 +392,78 @@ void Power::enableAONGPIOInterrupt(int aon_gpio, int mode)
     *(uint32_t*)AON_GPIO_INTMASK &= ~(1 << aon_gpio);
     *(uint32_t*)AON_GPIO_INTEN |= 1 << aon_gpio;
     
-    
-    *(uint32_t*)AON_GPIO_MASK_INT &= 0xFFFFFEFE;
+    *AON_GPIO_MASK_INT &= 0xFFFFFEFE;
     interrupt_disable(IRQ_ALWAYS_ON_GPIO);
-    interrupt_connect(IRQ_ALWAYS_ON_GPIO , &PM_InterruptHandler);
+    interrupt_connect(IRQ_ALWAYS_ON_GPIO , &soc_aongpio_sleep_isr);
     interrupt_enable(IRQ_ALWAYS_ON_GPIO);
 }
 
 void Power::enableAONPTimerInterrrupt(int millis)
 {
-    pmCB = resetAONPTimer;
-    *(uint32_t*)AONPT_CFG = millisToRTCTicks(millis);
-    *(uint32_t*)AONPT_CTRL |= 0x00000003;
+    __builtin_arc_sr(QM_IRQ_AONPT_0_INT_VECTOR, QM_SS_AUX_IRQ_SELECT);
+	__builtin_arc_sr(QM_SS_IRQ_LEVEL_SENSITIVE, QM_SS_AUX_IRQ_TRIGGER);
     
-    *(uint32_t*)AON_TIMER_MASK_INT &= 0xFFFFFEFE;
     interrupt_disable(IRQ_ALWAYS_ON_TMR);
-    interrupt_connect(IRQ_ALWAYS_ON_TMR , &PM_InterruptHandler);
-    delayTicks(6400);   //2ms
+    pmCB = resetAONPTimer;
+    *AONPT_CFG = millisToRTCTicks(millis);
+    interrupt_connect(IRQ_ALWAYS_ON_TMR , &aontimer_isr);
+    *AON_TIMER_MASK_INT &= 0xFFFFFEFE;
+    *AONPT_CTRL |= 0x00000002;
+    *AONPT_CTRL |= 0x00000001;  
+    volatile uint32_t aonpt_stat = *AONPT_STAT;
+    while(aonpt_stat)
+    {
+       *AONPT_CTRL &= 0xFFFFFFFE;
+       *AONPT_CTRL |= 0x00000001;
+       aonpt_stat = *AONPT_STAT;
+       //delayTicks(1000); 
+    }
     interrupt_enable(IRQ_ALWAYS_ON_TMR);
+}
+
+void Power::enableWakeInterrupts()
+{
+    void (*fptr)(void);
+    wsrc_t wsrc;
+ 
+    while (wsrc_get_newest_attached(&wsrc)) {
+        switch(wsrc.irq)
+        {
+        case IRQ_ALWAYS_ON_GPIO:
+            enableAONGPIOInterrupt((wsrc.id-GPIO_END), wsrc_gpio_mode(wsrc.status));
+            break;
+        case IRQ_ALWAYS_ON_TMR:
+            break;
+        case IRQ_RTC_INTR:
+            break;
+        case IRQ_GPIO0_INTR:
+            attachInterrupt(wsrc.id, &ss_gpio0_sleep_isr, wsrc_gpio_mode(wsrc.status));
+            interrupt_enable(wsrc.irq);
+            break;
+        case IRQ_GPIO1_INTR:
+            attachInterrupt(wsrc.id, &ss_gpio1_sleep_isr, wsrc_gpio_mode(wsrc.status));
+            interrupt_enable(wsrc.irq);
+            break;
+        case IRQ_GPIO_INTR:
+            attachInterrupt(wsrc.id, &soc_gpio_sleep_isr, wsrc_gpio_mode(wsrc.status));
+            interrupt_enable(wsrc.irq);
+            break;
+        case IRQ_TIMER1:
+            break;
+        default:
+            break;
+        }
+    }   
 }
 
 void Power::resetAONPTimer()
 {
-    *(uint32_t*)AONPT_CFG = 0;
-    *(uint32_t*)AONPT_CTRL |= 0x00000001;
-    delayTicks(6400);
-    
-    
-    //trick the HOST into waking from AONPTimer
-    *(uint32_t*)AONPT_CFG = 10;
-    *(uint32_t*)AONPT_CTRL |= 0x00000003;
-    
-    *(uint32_t*)AON_TIMER_MASK_INT &= 0xFFFFFFFE;
-    interrupt_enable(IRQ_ALWAYS_ON_TMR);
-    
-    
+    interrupt_disable(IRQ_ALWAYS_ON_TMR);
+    *AON_TIMER_MASK_INT |= 0xFFFFF1F1;
+    *AONPT_CFG = 0;
+    *AONPT_CTRL |= 0x00000001;
+    __builtin_arc_sr(QM_IRQ_AONPT_0_INT_VECTOR, QM_SS_AUX_IRQ_SELECT);
+	__builtin_arc_sr(QM_SS_IRQ_EDGE_SENSITIVE, QM_SS_AUX_IRQ_TRIGGER);
 }
 
 void Power::wakeFromRTC()
@@ -315,13 +477,15 @@ void Power::x86_C2Request()
 {
     switchToHybridOscillator();
     //request for the x86 core go into C2 sleep
+    *(uint32_t*)CCU_LP_CLK_CTL &= 0xFFFFFFFC;
     volatile uint32_t c2 = *(volatile uint32_t*)P_LVL2;
 }
 
 void Power::x86_C2LPRequest()
 {
     switchToHybridOscillator();
-    //request for the x86 core go into C2 sleep
+    //request for the x86 core go into C2LP sleep
+    *(uint32_t*)CCU_LP_CLK_CTL &= 0xFFFFFFFE;
     *(uint32_t*)CCU_LP_CLK_CTL |= 0x00000002;
     volatile uint32_t c2lp = *(volatile uint32_t*)P_LVL2;
 }
