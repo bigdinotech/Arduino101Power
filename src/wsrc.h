@@ -98,7 +98,7 @@ void wsrc_table_init (void);
 void wsrc_register_gpio (uint32_t pin, void (*callback)(void), uint32_t mode);
 void wsrc_register_id (int id, void (*callback)(void));
 void wsrc_unregister (int id);
-int getIndex(int id);
+int wsrc_getIndex(int id);
 
 int wsrc_get_newest_attached (wsrc_t *wsrc);
 int wsrc_get_oldest_attached (wsrc_t *wsrc);

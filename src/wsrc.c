@@ -90,22 +90,21 @@ static void wsrc_clear_active (uint8_t index)
     }
 }
 
-int getIndex(int id)
+int wsrc_getIndex(int id)
 {
    for (int i = 0; i < num_active; i++) {
-       if (wsrc_active[i].index == id)
-       {
+       if (wsrc_active[i].index == id){
            return i;
        }
-   }       
+   }
+   return 0; 
 }
 
 int wsrc_get_newest_attached (wsrc_t *wsrc)
 {
     uint8_t i;
     
-    if(num_active == 0)
-    {
+    if(num_active == 0){
         return 0;
     }
     

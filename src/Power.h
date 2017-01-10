@@ -52,6 +52,7 @@
 #include <stdint.h>
 #include <interrupt.h>
 #include <board.h>
+#include <portable.h>
 #include "qmsi/qm_sensor_regs.h"
 #include "qmsi/ss_power_states.h"
 #include "wsrc.h"
