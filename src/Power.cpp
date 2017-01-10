@@ -251,6 +251,7 @@ void Power::sleep()
 		QM_SS_IO_CREG_MST0_CTRL_SPI0_CLK_GATE);
                 
     __builtin_arc_sr(creg_mst0_ctrl, QM_SS_CREG_BASE);
+    soc_sleeping = false;
 }
 
 void Power::sleep(int duration)
