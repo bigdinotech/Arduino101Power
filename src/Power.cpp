@@ -129,9 +129,9 @@ static void aontimer_isr()
         PM.wakeFromDoze();
         interrupt_unlock(flags);
         //wait until quark core is running
-        volatile uint32_t psts = (REG_VAL(P_STS))&0x7;
+        volatile uint32_t psts = (MMIO_REG_VAL(P_STS))&0x7;
         while(psts){
-          psts = (REG_VAL(P_STS))&0x7;
+          psts = (MMIO_REG_VAL(P_STS))&0x7;
         }
         PM.wakeFromSleepCallback();
     }
@@ -153,12 +153,12 @@ void Power::doze()
     switchToHybridOscillator();
 
     //Set system clock to the RTC Crystal Oscillator
-    uint32_t current_val = REG_VAL(CCU_SYS_CLK_CTL);
-    REG_VAL(CCU_SYS_CLK_CTL) = current_val & 0xFFFFFFFE;
+    uint32_t current_val = MMIO_REG_VAL(CCU_SYS_CLK_CTL);
+    MMIO_REG_VAL(CCU_SYS_CLK_CTL) = current_val & 0xFFFFFFFE;
 
     //Powerdown hybrid oscillator
-    current_val = REG_VAL(OSC0_CFG1);
-    REG_VAL(OSC0_CFG1) = current_val | 0x00000004; 
+    current_val = MMIO_REG_VAL(OSC0_CFG1);
+    MMIO_REG_VAL(OSC0_CFG1) = current_val | 0x00000004; 
 }
 
 void Power::doze(int duration)
@@ -183,12 +183,12 @@ void Power::idle(int duration)
 void Power::wakeFromDoze()
 {
     //Powerup hybrid oscillator
-    uint32_t current_val = REG_VAL(OSC0_CFG1);
-    REG_VAL(OSC0_CFG1) = current_val & 0xFFFFFFFB;
+    uint32_t current_val = MMIO_REG_VAL(OSC0_CFG1);
+    MMIO_REG_VAL(OSC0_CFG1) = current_val & 0xFFFFFFFB;
    
     //Set system clock to the Hybrid Oscillator
-    current_val = REG_VAL(CCU_SYS_CLK_CTL);
-    REG_VAL(CCU_SYS_CLK_CTL) = current_val | 0x00000001;
+    current_val = MMIO_REG_VAL(CCU_SYS_CLK_CTL);
+    MMIO_REG_VAL(CCU_SYS_CLK_CTL) = current_val | 0x00000001;
 
     //switch back to the external crystal oscillator
     void switchToCrystalOscillator();
@@ -201,7 +201,7 @@ void Power::sleep()
 {
     soc_sleeping = true;
     //disable low power mode on OPM_2P6 regulator
-    REG_VAL(SLP_CFG) &= ~(1 << LPMODE_EN);
+    MMIO_REG_VAL(SLP_CFG) &= ~(1 << LPMODE_EN);
     
     uint32_t creg_mst0_ctrl = 0;
     creg_mst0_ctrl = READ_ARC_REG(QM_SS_CREG_BASE);
@@ -293,31 +293,31 @@ void Power::detachInterruptWakeup(uint32_t pin)
 
 void Power::turnOffUSB()
 {
-    REG_VAL(USB_PHY_CFG0) |= 0x00000001; 
+    MMIO_REG_VAL(USB_PHY_CFG0) |= 0x00000001; 
 }
 
 void Power::turnOnUSB()
 {
-    REG_VAL(USB_PHY_CFG0) &= 0xFFFFFFFE;
+    MMIO_REG_VAL(USB_PHY_CFG0) &= 0xFFFFFFFE;
 }
 
 void Power::switchToHybridOscillator()
 {
     //read trim value from OTP
     uint32_t trimMask = *(uint16_t*)OSCTRIM_ADDR << 20;
-    REG_VAL(OSC0_CFG1) = 0x00000002 | trimMask;  //switch to internal hybrid oscillator using trim value from OTP
+    MMIO_REG_VAL(OSC0_CFG1) = 0x00000002 | trimMask;  //switch to internal hybrid oscillator using trim value from OTP
     //ToDo: wait for hybrid oscillator to stabilize
 }
 
 void Power::switchToCrystalOscillator()
 {
-    REG_VAL(OSC0_CFG1) = 0x00070009;
-    while(!(REG_VAL(OSC0_STAT) & 0x00000002));   //wait till crystal oscillator is stable
+    MMIO_REG_VAL(OSC0_CFG1) = 0x00070009;
+    while(!(MMIO_REG_VAL(OSC0_STAT) & 0x00000002));   //wait till crystal oscillator is stable
 }
 
 void Power::setRTCCMR(int seconds)
 {
-    REG_VAL(RTC_CMR) = readRTC_CCVR() + seconds;
+    MMIO_REG_VAL(RTC_CMR) = readRTC_CCVR() + seconds;
 }
 
 uint32_t Power::readRTC_CCVR()
@@ -333,10 +333,10 @@ uint32_t Power::millisToRTCTicks(int milliseconds)
 void Power::enableRTCInterrupt(int seconds)
 {
     setRTCCMR(seconds);
-    REG_VAL(RTC_MASK_INT) &= 0xFFFFFEFE;
-    REG_VAL(RTC_CCR) |= 0x00000001;
-    REG_VAL(RTC_CCR) &= 0xFFFFFFFD;
-    volatile uint32_t read = REG_VAL(RTC_EOI);
+    MMIO_REG_VAL(RTC_MASK_INT) &= 0xFFFFFEFE;
+    MMIO_REG_VAL(RTC_CCR) |= 0x00000001;
+    MMIO_REG_VAL(RTC_CCR) &= 0xFFFFFFFD;
+    volatile uint32_t read = MMIO_REG_VAL(RTC_EOI);
     
     pmCB = &wakeFromRTC;
     interrupt_disable(IRQ_RTC_INTR);
@@ -349,34 +349,34 @@ void Power::enableAONGPIOInterrupt(int aon_gpio, int mode)
 {
     switch(mode){
         case CHANGE:    //not supported just do the same as FALLING
-            REG_VAL(AON_GPIO_INTTYPE_LEVEL) |= 1 << aon_gpio;
-            REG_VAL(AON_GPIO_INT_POL) &= ~(1 << aon_gpio);
+            MMIO_REG_VAL(AON_GPIO_INTTYPE_LEVEL) |= 1 << aon_gpio;
+            MMIO_REG_VAL(AON_GPIO_INT_POL) &= ~(1 << aon_gpio);
             break;
         case RISING:
-            REG_VAL(AON_GPIO_INTTYPE_LEVEL) |= 1 << aon_gpio;
-            REG_VAL(AON_GPIO_INT_POL) |= 1 << aon_gpio;
+            MMIO_REG_VAL(AON_GPIO_INTTYPE_LEVEL) |= 1 << aon_gpio;
+            MMIO_REG_VAL(AON_GPIO_INT_POL) |= 1 << aon_gpio;
             break;
         case FALLING:
-            REG_VAL(AON_GPIO_INTTYPE_LEVEL) |= 1 << aon_gpio;
-            REG_VAL(AON_GPIO_INT_POL) &= ~(1 << aon_gpio);
+            MMIO_REG_VAL(AON_GPIO_INTTYPE_LEVEL) |= 1 << aon_gpio;
+            MMIO_REG_VAL(AON_GPIO_INT_POL) &= ~(1 << aon_gpio);
             break;
         case HIGH:
-            REG_VAL(AON_GPIO_INTTYPE_LEVEL) &= ~(1 << aon_gpio);
-            REG_VAL(AON_GPIO_INT_POL) |= 1 << aon_gpio;
+            MMIO_REG_VAL(AON_GPIO_INTTYPE_LEVEL) &= ~(1 << aon_gpio);
+            MMIO_REG_VAL(AON_GPIO_INT_POL) |= 1 << aon_gpio;
             break;
         case LOW:
-            REG_VAL(AON_GPIO_INTTYPE_LEVEL) &= ~(1 << aon_gpio);
-            REG_VAL(AON_GPIO_INT_POL) &= ~(1 << aon_gpio);
+            MMIO_REG_VAL(AON_GPIO_INTTYPE_LEVEL) &= ~(1 << aon_gpio);
+            MMIO_REG_VAL(AON_GPIO_INT_POL) &= ~(1 << aon_gpio);
             break;
         default:
-            REG_VAL(AON_GPIO_INTTYPE_LEVEL) &= ~(1 << aon_gpio);
-            REG_VAL(AON_GPIO_INT_POL) &= ~(1 << aon_gpio);
+            MMIO_REG_VAL(AON_GPIO_INTTYPE_LEVEL) &= ~(1 << aon_gpio);
+            MMIO_REG_VAL(AON_GPIO_INT_POL) &= ~(1 << aon_gpio);
             break;
     };
     
-    REG_VAL(AON_GPIO_SWPORTA_DDR) &= ~(1 << aon_gpio);
-    REG_VAL(AON_GPIO_INTMASK) &= ~(1 << aon_gpio);
-    REG_VAL(AON_GPIO_INTEN) |= 1 << aon_gpio;
+    MMIO_REG_VAL(AON_GPIO_SWPORTA_DDR) &= ~(1 << aon_gpio);
+    MMIO_REG_VAL(AON_GPIO_INTMASK) &= ~(1 << aon_gpio);
+    MMIO_REG_VAL(AON_GPIO_INTEN) |= 1 << aon_gpio;
     
     *AON_GPIO_MASK_INT &= 0xFFFFFEFE;
     interrupt_disable(IRQ_ALWAYS_ON_GPIO);
@@ -452,16 +452,16 @@ void Power::resetAONPTimer()
 
 void Power::wakeFromRTC()
 {
-    REG_VAL(RTC_MASK_INT) |= 0x00000101;
+    MMIO_REG_VAL(RTC_MASK_INT) |= 0x00000101;
     interrupt_disable(IRQ_RTC_INTR);
-    volatile uint32_t read = REG_VAL(RTC_EOI);
+    volatile uint32_t read = MMIO_REG_VAL(RTC_EOI);
 }
 
 void Power::x86_C2Request()
 {
     switchToHybridOscillator();
     //request for the x86 core go into C2 sleep
-    REG_VAL(CCU_LP_CLK_CTL) &= 0xFFFFFFFC;
+    MMIO_REG_VAL(CCU_LP_CLK_CTL) &= 0xFFFFFFFC;
     volatile uint32_t c2 = MMIO_REG_VAL(P_LVL2);
 }
 
@@ -469,7 +469,7 @@ void Power::x86_C2LPRequest()
 {
     switchToHybridOscillator();
     //request for the x86 core go into C2LP sleep
-    REG_VAL(CCU_LP_CLK_CTL) &= 0xFFFFFFFE;
-    REG_VAL(CCU_LP_CLK_CTL) |= 0x00000002;
+    MMIO_REG_VAL(CCU_LP_CLK_CTL) &= 0xFFFFFFFE;
+    MMIO_REG_VAL(CCU_LP_CLK_CTL) |= 0x00000002;
     volatile uint32_t c2lp = MMIO_REG_VAL(P_LVL2);
 }
