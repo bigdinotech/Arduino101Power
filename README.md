@@ -11,7 +11,7 @@ CuriePower is a Power Management library for Curie based boards such as the Ardu
 void CuriePower.doze()
 ```
 
-Places the SoC in "doze" mode which simply switches the system clock to the internal 32Khz RTC oscillator.
+Places the SoC in "doze" mode which simply switches the system clock to the internal 32.768 kHz RTC oscillator.
 
 *Parameters*
 
@@ -179,4 +179,38 @@ none
 
 #Tutorials
 
-Work In Progress
+##Tutorial #1: TimedWakeup Example
+
+This sketch demonstrates the simplest way to use the CuriePower library. It blinks the LED a few times, goes to sleep for a certain amount then goes back at the start of loop()
+
+```cpp
+#include <Power.h>
+
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void loop() {
+  for(int i = 0; i < 5; i++)
+  { 
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(100);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(100);
+  }
+  PM.sleep(1000);
+}
+```
+
+The line of code that is most interesting here is:
+```cpp
+PM.sleep(1000);
+```
+This puts the SoC into sleep, drawing significantly less power, for 1000ms or 1s.
+
+In what situations is this most useful?
+
+Lets says you have a battery powered project that reads a sensor value once every second and saves it to an SD card.
+Simply using delay() will work but you will notice that you will run out of battery pretty fast. That is becasue even though the code is not doing much insude delay, it is still running everything at full clock speed and all peripeherals are on.
+When we put the SoC to sleep, several things are turned off like most of the peripherals. voltage rails, and clocks. Basically, it drwas much less power and no code is running until a wake interrupt is generated.
+
