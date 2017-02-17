@@ -287,6 +287,9 @@ void Power::attachInterruptWakeup(uint32_t pin, voidFuncPtr callback, uint32_t m
 void Power::detachInterruptWakeup(uint32_t pin)
 {
     wsrc_unregister(pin);
+    if (pin <= GPIO_END) {
+        detachInterrupt(pin);
+    }
 }
 
 //Privates
