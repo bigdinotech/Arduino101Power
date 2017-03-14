@@ -25,7 +25,10 @@
 #define wsrc_set_wakeup(stat)          (stat |= 4)
 #define wsrc_clear_wakeup(stat)        (stat &= ~4)
 #define wsrc_gpio_mode(stat)           ((stat & GPIO_MODE_MASK) >> 3)
-#define wsrc_set_gpio_mode(stat, mode) (stat |= (mode << 3) & ~(GPIO_MODE_MASK))
+#define wsrc_set_gpio_mode(stat, mode)({\
+                        stat &= ~GPIO_MODE_MASK;\ 
+                        stat |= (mode << 3);\
+                        });
 
 enum {
     /* TODO: not all of these can actually be used as wakeup sources.
