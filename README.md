@@ -211,6 +211,9 @@ This puts the SoC into sleep, drawing significantly less power, for 1000ms or 1s
 In what situations is this most useful?
 
 Lets says you have a battery powered project that reads a sensor value once every second and saves it to an SD card.
-Simply using delay() will work but you will notice that you will run out of battery pretty fast. That is becasue even though the code is not doing much insude delay, it is still running everything at full clock speed and all peripeherals are on.
-When we put the SoC to sleep, several things are turned off like most of the peripherals. voltage rails, and clocks. Basically, it drwas much less power and no code is running until a wake interrupt is generated.
+Simply using delay() will work but you will notice that you will run out of battery pretty fast. That is becasue even though the code is not doing much inside delay, it is still running everything at full clock speed and all peripeherals are turned on.
+When we put the SoC to sleep, several things are turned off. This includes most of the peripherals. voltage rails, and some clocks. Basically, it draws much less power and no code is running until a wake interrupt is generated.
 
+Many projects typically have a loop where you read a sensor, do something with that reading, and then delaying for a set amount of time.
+In most cases, the sensor reading and action after typically takes much less time than the delay. This means that we are wasting a lot of power inside the delay doing nothing.
+By placing the SoC to sleep instead of just waiting inside the delay, we can save a considerable amount of power in most applications.
