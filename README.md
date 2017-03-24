@@ -1,9 +1,9 @@
 # CuriePower
 CuriePower is a Power Management library for Curie based boards such as the Arduino101/Genuino101 and tinyTILE
 
-#CuriePower API reference
+# CuriePower API reference
 
-##Functions
+## Functions
 
 ### ``CuriePower.doze()``
 
@@ -177,9 +177,9 @@ none
 
 none
 
-#Tutorials
+# Tutorials
 
-##Tutorial #1: TimedWakeup Example
+## Tutorial #1: TimedWakeup Example
 
 This sketch demonstrates the simplest way to use the CuriePower library. It blinks the LED a few times, goes to sleep for a certain amount then goes back at the start of loop()
 
