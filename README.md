@@ -254,15 +254,15 @@ void wakeup()
 }
 ```
 
-If you look at the beginning of the main loop you will see:
+If you look at the beginning of loop() you will see:
 ```cpp
 PM.sleep();
 ```
-This line of code puts the SoC to sleep and stays in the state until it is waken up by an interrupt.
-If no interrupt triggers it the SoC to wakeup, it will simply stay in a low power sleeps state forever(or until the battery runs out)
+This line of code simple puts the SoC to sleep and stays in that state until it is waken up by an interrupt.
+If no interrupt triggers the SoC to wakeup, it will simply stay in a low power sleeps state forever(or until the battery runs out).
 This is specifically useful in applications that are not periodic, like in this example sketch where the SoC stays at a sleep state until the Arduino101 detects motion, or more precisely the Bosch BMI160 sensor detects the motion and triggers an interrupt to wake the Curie Soc from sleep.
 
-Inside setup we have:
+Inside setup() we have:
 ```cpp
 CurieIMU.attachInterrupt(wakeup);
 CurieIMU.setDetectionThreshold(CURIE_IMU_MOTION, 20);      // 100mg
